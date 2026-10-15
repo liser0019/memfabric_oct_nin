@@ -323,7 +323,7 @@ Result UrmaTopoManager::ParseEdgeList(const std::string &json, std::vector<Edge>
         (void)device::ParseStrArray(edgeJson, "\"local_a_ports\"", edge.localAPorts);
         (void)device::ParseStrArray(edgeJson, "\"local_b_ports\"", edge.localBPorts);
         (void)device::ParseStrArray(edgeJson, "\"protocols\"", edge.protocols);
-        if (edge.localA == localId_ || edge.localB == localId_) {
+        if ((edge.localA == localId_ || edge.localB == localId_) && edge.linkType == "PEER2PEER") {
             edgeList.push_back(std::move(edge));
         }
         pos = vr.offset;
@@ -497,6 +497,9 @@ Result UrmaTopoManager::BuildPeer2PeerMap()
             std::array<uint8_t, COMM_ADDR_EID_LEN> eid{};
             bool found = false;
             for (const auto &level : rank.levelList) {
+                if (level.netType == "COLS") {
+                    continue;
+                }
                 for (const auto &addr : level.rankAddrList) {
                     if (std::find(addr.ports.begin(), addr.ports.end(), edgePort) != addr.ports.end()) {
                         HexStrToEid(addr.addr, eid);

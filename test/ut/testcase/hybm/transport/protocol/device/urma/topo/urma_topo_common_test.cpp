@@ -679,9 +679,10 @@ TEST_F(UrmaTopoManagerTest, ParseEdgeList_FiltersByLocalId)
 {
     auto &mgr = UrmaTopoManager::GetInstance();
     mgr.localId_ = 0;
-    std::string json = R"({"edge_list":[)"
-                       R"({"local_a":0,"local_b":1,"local_a_ports":["0/0"],"local_b_ports":["1/0"]},)"
-                       R"({"local_a":2,"local_b":3,"local_a_ports":["0/1"],"local_b_ports":["1/1"]}]})";
+    std::string json =
+        R"({"edge_list":[)"
+        R"({"link_type":"PEER2PEER","local_a":0,"local_b":1,"local_a_ports":["0/0"],"local_b_ports":["1/0"]},)"
+        R"({"link_type":"PEER2PEER","local_a":2,"local_b":3,"local_a_ports":["0/1"],"local_b_ports":["1/1"]}]})";
     std::vector<Edge> edges;
     EXPECT_EQ(mgr.ParseEdgeList(json, edges), BM_OK);
     ASSERT_EQ(edges.size(), 1U);
@@ -1060,14 +1061,14 @@ TEST_F(UrmaTopoManagerTest, ParseEdgeList_WithAllFields)
     auto &mgr = UrmaTopoManager::GetInstance();
     mgr.localId_ = 0;
     std::string json = R"({"edge_list":[)"
-                       R"({"net_layer":0,"link_type":"HCCS","topo_type":"mesh",)"
+                       R"({"net_layer":0,"link_type":"PEER2PEER","topo_type":"mesh",)"
                        R"("topo_instance_id":1,"topo_attr":"attr","local_a":0,"local_b":3,)"
                        R"("local_a_ports":["0/0","0/1"],"local_b_ports":["1/0","1/1"],)"
                        R"("protocols":["HCCS-4P"],"position":"P2P"}]})";
     std::vector<Edge> edges;
     EXPECT_EQ(mgr.ParseEdgeList(json, edges), BM_OK);
     ASSERT_EQ(edges.size(), 1U);
-    EXPECT_EQ(edges[0].linkType, "HCCS");
+    EXPECT_EQ(edges[0].linkType, "PEER2PEER");
     EXPECT_EQ(edges[0].topoType, "mesh");
     EXPECT_EQ(edges[0].localB, 3);
     EXPECT_EQ(edges[0].position, "P2P");

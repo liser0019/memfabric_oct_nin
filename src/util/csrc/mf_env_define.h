@@ -63,6 +63,7 @@ inline const std::string MF_HOST_SHM_USE_MEMFD = GetEnvStr("MF_HOST_SHM_USE_MEMF
 inline const std::string MF_LOG_LEVEL = GetEnvStr("MF_LOG_LEVEL", "ASCEND_MF_LOG_LEVEL");
 inline const std::string MF_SOCKET_URL = GetEnvStr("MF_SOCKET_URL");
 inline const std::string MF_TRANSPORT_MANAGER = GetEnvStr("MF_TRANSPORT_MANAGER", "TRANSPORT_MANAGER");
+inline const std::string TEST_MF_TRANSPORT_FULL_MESH = GetEnvStr("TEST_MF_TRANSPORT_FULL_MESH");
 inline const std::string MF_CONFIG_STORE_URL = GetEnvStr("MF_CONFIG_STORE_URL", "ASCEND_MF_STORE_URL");
 inline const std::string MF_CONFIG_STORE_HEARTBEAT_TIMEOUT_S = GetEnvStr("MF_CONFIG_STORE_HEARTBEAT_TIMEOUT_S");
 inline const std::string MF_CONFIG_STORE_LINK_RETRY_TIMEOUT_S = GetEnvStr("MF_CONFIG_STORE_LINK_RETRY_TIMEOUT_S");

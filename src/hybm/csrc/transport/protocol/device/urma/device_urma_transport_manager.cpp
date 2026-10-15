@@ -36,6 +36,7 @@
 #include "hybm_logger.h"
 #include "hybm_ptracer.h"
 #include "hybm_stream_manager.h"
+#include "mf_env_define.h"
 #include "mf_env_util.h"
 #include "urma_topo_helper.h"
 #include "hybm_va_manager.h"
@@ -43,6 +44,8 @@
 #include "device_urma_transport_manager.h"
 
 #include "urma_topo_manager.h"
+
+using namespace ock::mf;
 
 namespace ock {
 namespace mf {
@@ -594,13 +597,11 @@ Result DeviceUrmaTransportManager::BuildLocalEndpointsDescLocked(UrmaProtocol pr
             localDesc.serverIdx = serverId_;
             localDesc.superPodIdx = superPodId_;
             localDesc.type = COMM_ADDR_TYPE_IP_V6;
-            if ((phyDeviceId_ == 0 && index == 2) || (phyDeviceId_ == 2 && index == 0)) {
-                localIds_.push_back(index);
-                std::memcpy(localDesc.raws, eid.data(), COMM_ADDR_EID_LEN);
-                BM_LOG_INFO("device_urma local endpoint address protocol=UBC_CTP phyDeviceId="
-                            << phyDeviceId_ << " rankId=" << rankId_ << " eid=" << FormatEid(eid));
-                localDescs.push_back(localDesc);
-            }
+            localIds_.push_back(index);
+            std::memcpy(localDesc.raws, eid.data(), COMM_ADDR_EID_LEN);
+            BM_LOG_DEBUG("device_urma local endpoint address protocol=UBC_CTP phyDeviceId="
+                         << phyDeviceId_ << " rankId=" << rankId_ << " eid=" << FormatEid(eid));
+            localDescs.push_back(localDesc);
         }
         return BM_OK;
     }
@@ -719,7 +720,8 @@ Result DeviceUrmaTransportManager::OpenEndpointResourcesLocked(const TransportOp
     }
     BM_LOG_INFO("device_urma OpenDevice protocol=" << protocol_ << ", rankId=" << rankId_ << ", phyDeviceId="
                                                    << phyDeviceId_ << ", mainboardId=" << mainboardId_);
-    if (IsFM16Product()) {
+    static const bool fullMesh = MfEnvUtil::GetOptionalUintOrDefault(env::TEST_MF_TRANSPORT_FULL_MESH, 0u) != 0u;
+    if (fullMesh || IsFM16Product()) {
         std::vector<UrmaEndpointDesc> localDescs;
         auto ret = BuildLocalEndpointsDescLocked(protocol_, localDescs);
         if (ret != BM_OK) {
