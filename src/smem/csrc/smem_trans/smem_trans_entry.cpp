@@ -714,7 +714,14 @@ int SmemTransEntry::OnAddSlices(uint32_t extendingRankId, const MultiBytes &newS
         hybm_export_info_free(&parsed);
     }
     if (ret != BM_OK) {
-        SM_LOG_ERROR("OnAddSlices: hybm_import failed, extendingRank=" << extendingRankId << " ret=" << ret);
+        // P2P 未就绪属启动竞态期瞬态（根因已在 segment 层记 WARN），白名单重试会全量补发，降为 WARN；
+        // 其余失败码仍按 ERROR 处理
+        if (ret == BM_P2P_NOT_READY) {
+            SM_LOG_WARN("OnAddSlices: hybm_import not ready, will re-deliver via whitelist retry, extendingRank="
+                        << extendingRankId << " ret=" << ret);
+        } else {
+            SM_LOG_ERROR("OnAddSlices: hybm_import failed, extendingRank=" << extendingRankId << " ret=" << ret);
+        }
         return SMEM_ERROR;
     }
     auto it = rankToWorkerId_.find(extendingRankId);
@@ -725,7 +732,7 @@ int SmemTransEntry::OnAddSlices(uint32_t extendingRankId, const MultiBytes &newS
                                               LocalMapAddress{globalAddrs[i], infos[i].u.address.size});
         }
     } else {
-        SM_LOG_ERROR("OnAddSlices: rank " << extendingRankId << " not found in rankToWorkerId_");
+        SM_LOG_WARN("OnAddSlices: rank " << extendingRankId << " not found in rankToWorkerId_");
     }
     auto mmapRet = hybm_mmap(entity_, 0);
     if (mmapRet != BM_OK) {
@@ -772,7 +779,7 @@ smem_trans_role_t SmemTransEntry::QueryRole(uint32_t rk)
     mf::ReadGuard locker(remoteSliceRwMutex_);
     auto it = ranksRole_.find(rk);
     if (it == ranksRole_.end()) {
-        SM_LOG_ERROR("not found this rank:" << rk << " in ranksRole_");
+        SM_LOG_WARN("not found this rank:" << rk << " in ranksRole_");
         return SMEM_TRANS_BUTT;
     }
     return it->second;

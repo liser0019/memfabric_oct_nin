@@ -301,7 +301,8 @@ void SmemGroupCommandAsyncDispatcher::BackgroundAddSlices(const AddSlicesRequest
     if (onAddSlices_) {
         int ret = onAddSlices_(req.extendingRankId, req.newSlices, reqId);
         if (ret != 0) {
-            SM_LOG_ERROR("[GM][Client][Recv] AddSlices FAIL ext=" << req.extendingRankId << " ret=" << ret);
+            // 仅结果追踪：瞬态（P2P 未就绪）与真实错误（如 payload 损坏）的根因均已在回调内按级别记录
+            SM_LOG_WARN("[GM][Client][Recv] AddSlices FAIL ext=" << req.extendingRankId << " ret=" << ret);
         }
     }
     SM_LOG_INFO("[GM][Client][Recv] AddSlices ext=" << req.extendingRankId << " slices=" << req.newSlices.size());

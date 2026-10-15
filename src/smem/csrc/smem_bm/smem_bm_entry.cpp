@@ -968,7 +968,14 @@ int SmemBmEntry::OnAddSlices(uint32_t extendingRankId, const MultiBytes &newSlic
         hybm_export_info_free(&info);
     }
     if (ret != BM_OK) {
-        SM_LOG_ERROR("OnAddSlices: hybm_import failed, extendingRank=" << extendingRankId << " ret=" << ret);
+        // P2P 未就绪属启动竞态期瞬态（根因已在 segment 层记 WARN），白名单重试会全量补发，降为 WARN；
+        // 其余失败码仍按 ERROR 处理
+        if (ret == BM_P2P_NOT_READY) {
+            SM_LOG_WARN("OnAddSlices: hybm_import not ready, will re-deliver via whitelist retry, extendingRank="
+                        << extendingRankId << " ret=" << ret);
+        } else {
+            SM_LOG_ERROR("OnAddSlices: hybm_import failed, extendingRank=" << extendingRankId << " ret=" << ret);
+        }
         return SM_ERROR;
     }
     auto mmapRet = hybm_mmap(entity_, 0);
