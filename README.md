@@ -10,52 +10,39 @@ DRAM&HBM hybrid pooling, memory semantic interface, high-performance cross-machi
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/memfabric-hybrid)](https://pypi.org/project/memfabric-hybrid/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/memfabric-hybrid)](https://pypi.org/project/memfabric-hybrid/)
 [![GitCode commit activity](https://img.shields.io/badge/commit_activity-high-light)](https://gitcode.com/Ascend/memfabric_hybrid/analysis)
-[![license](https://img.shields.io/badge/license-MulanPSL2-orange)](https://gitcode.com/Ascend/memcache/blob/master/LICENSE)
+[![license](https://img.shields.io/badge/license-MulanPSL2-orange)](./LICENSE)
 
 </div>
 <br/>
 
 ## 🔄Latest News
 
-- [2026/01] DRAM池化相关配套已发布支持，详见[软件硬件配套](#软件硬件配套说明)
+- [2026/09] MemFabric Offload基于GVA统一编址内存直访，加速离散小数据块从DRAM池加载到HBM，优化SGLang HiCache L2加速[PR#38826](https://github.com/sgl-project/sglang/pull/38826)
 
-- [2025/12] MemFabric + MemCache已作为vllm-ascend backend使能大模型推理加速，详情查看vllm-ascend开源社区，[使用示例](https://github.com/vllm-project/vllm-ascend/blob/main/docs/source/user_guide/feature_guide/kv_pool.md#example-of-using-memcache-as-a-kv-pool-backend)
+- [2026/08] MemFabric GVA统一编址支持FlowTrain分离式多模态训练框架，论文已被EMNLP 2026 Industry Track录用，在工业级VLM训练中实现超50% MFU、最高1.7倍吞吐提升，[技术解读](https://developer.jdcloud.com/article/4562)，[论文](https://arxiv.org/pdf/2606.23087)
+
+- [2025/12] MemFabric + MemCache 已作为 vLLM-Ascend 的 KV Pool 后端使能大模型推理加速，详情请参见 vLLM-Ascend 官方文档：[使用示例](https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/kv_cache_pool_ascend_store.html#scenario-2-memcache-backend)
 
 - [2025/11] MemFabric项目于2025年11月开源，在昇腾上提供高效的多链路的D2RH,RH2D,RH2H,D2D,D2H,H2D等内存直接访问能力。
 
 ## 🔜 Roadmap
 
-MemFabric roadmap和版本分支策略详见：[**Roadmap**](https://gitcode.com/Ascend/memfabric_hybrid/wiki/Roadmap.md)
+MemFabric [**Roadmap**](https://gitcode.com/Ascend/memfabric_hybrid/wiki/Roadmap.md)
+MemFabric [**版本分支策略**](https://gitcode.com/Ascend/memfabric_hybrid/wiki/%E5%88%86%E6%94%AF%E7%AD%96%E7%95%A5.md)
 
 ## 🎉概述
 
-  MemFabric是一款开源内存池化软件，面向昇腾超节点和服务器等，其设计目的与核心思想是:
+  MemFabric是一款开源内存池化软件，面向昇腾超节点、昇腾服务器、鲲鹏超节点、鲲鹏服务器等硬件，其设计目的与核心思想是:
 
-  - 异构设备的统一池化: 将多节点的异构设备内存(DRAM|HBM等)池化, 提供高性能的全局内存"直接访问"的能力
-  - 简单的北向接口: 提供内存语义访问接口, 即xcopy with global virtual address, 向传统的memcpy概念靠近, 支持D2RH\RH2D\RH2H\D2D等
-  - 南向高可扩展: 通过插件的方式支持多种DMA引擎和LD/ST及多种网络/灵衢互联(Device UB、Device RoCE、Host UB、Host RoCE等)
+  - 异构设备的统一池化: 将多节点的异构设备内存(DRAM|HBM等)池化, 基于GVA(Global Virtual Address)提供高性能的全局内存"直接访问"能力
+  - 简单的北向接口: 提供内存语义访问接口, 即xcopy with GVA, 贴近传统memcpy概念，通过xcopy完成数据交换, 支持D2RH\RH2D\RH2H\D2D等多向访问
+  - 南向高可扩展: 支持插件化对接多种DMA引擎(Device SDMA、Device RDMA、Device URMA、Device UBoE、Host RDMA、Host TCP、Host URMA、Host SHM等多种协议或引擎)
 
 ![architecture](./docs/zh/source/architecture.png)
 
-如上图所示, MemFabric主要分为四大模块: Global Memory Management、Data Operation、Transport Management、API
-
-  * **Global Memory Management**: 实现全局统一内存地址(Global Virtual Address, GVA)的统一编排、页表映射策略制定及通过驱动将映射策略注入页表
-  * **Data Operation**: xcopy的实现，驱动xDMA、LD/ST实现全局内存直接读写
-  * **Transport Management**: 链接管理; xcopy驱动Host RDMA、Device RDMA、UDMA时，需要建立QP、Jetty链接，xcopy使用SDMA、MTE、LD/ST时不需要Transport Management
-  * **API**: 统一且简单的API及其实现, 包括BM API、SHM API、Trans API，三种API适用于不同的场景
-
-其中, Global Memory Management、Data Operation、Transport Management都实现了逻辑的抽象, 可以轻松扩展实现不同硬件的对接。当前已支持的南向包括:
-
-  * 昇腾A3超节点: DRAM+HBM pooling over Device UB 1.0, DRAM pooling over Host RoCE
-  * 昇腾A2服务器: DRAM+HBM pooling over Device RoCE, DRAM pooling over Host RoCE
-  * 鲲鹏服务器: DRAM pooling over Host RoCE
-  * 鲲鹏超节点: DRAM pooling over Host UB
-
-MemFabric以动态库的形式支持应用快速，简便的集成，支撑大模型KV缓存、生成式推荐缓存、强化训练参数Reshard、模型参数缓存、PD传输等多种业务场景。
-
 ## 🧩核心特性
 
-- **池化与全局统一编址**
+### 池化与全局统一编址
 
 MemFabric通过构建逻辑上的全局内存语义统一编址，对分布在不同层级、不同节点的内存单元进行统一管理与使用，使系统能够像管理单一物理资源一样，对跨CPU、NPU的内存资源进行统一寻址和透明访问，核心目的是实现内存资源的整合与统一调度，最大程度的释放硬件性能。
 GVA的特点:
@@ -66,49 +53,21 @@ GVA的特点:
 
 ![unified_global_address](./docs/zh/source/unified_global_address.png)
 
-- **跨机跨介质直接访问**
+### 跨机跨介质直接访问
 
   基于MemFabric内存语义统一编址，数据可以在跨节点的多级存储间实现透明、直接访问。
 
   典型跨节点跨介质的访问路径有：
-    - D2RH：本机HBM到跨机DRAM
-    - RH2D：跨机DRAM到本机HBM
-    - RH2H：跨机DRAM到本机DRAM
+
+  - D2RH：本机HBM到跨机DRAM
+  - RH2D：跨机DRAM到本机HBM
+  - RH2H：跨机DRAM到本机DRAM
 
   Note: D为Device, RH为Remote Host
 
 MemFabric跨机访问数据流和控制流如下图所示(昇腾A3超节点):
 
 ![one_copy](./docs/zh/source/one_copy.png)
-
-当前MemFabric池化的硬件支持情况如下：
-
-* 昇腾A3超节点：Device UB 1.0，Host rdma
-* 昇腾A2服务器：Device rdma，Host rdma
-* 鲲鹏服务器: Host rdma
-
-| 池化类型         | 访问方向  | host rdma | device rdma | Device UB 1.0   |
-|-----------------|----------|-----------|-------------|----------------|
-| DRAM POOL       |   LD2GH  | ✅        | ✅         | ✅           |
-| DRAM POOL       |   GH2LD  | ✅        | ✅         | ✅           |
-| DRAM POOL       |   LH2GH  | ✅        | ✅         | ✅           |
-| DRAM POOL       |   GH2LH  | ✅        | ✅         | ✅           |
-| HBM POOL        |   GD2LH  | ❌         | ✅         | ✅           |
-| HBM POOL        |   LH2GD  | ❌         | ✅         | ✅           |
-| HBM POOL        |   GD2LD  | ❌         | ✅         | ✅           |
-| HBM POOL        |   LD2GD  | ❌         | ✅         | ✅           |
-| HBM + DRAM POOL |   GH2GD  | ❌         | ✅         | ✅           |
-| HBM + DRAM POOL |   GD2GH  | ❌         | ✅         | ✅           |
-| HBM + DRAM POOL |   GH2GH  | ❌         | ✅         | ✅           |
-| HBM + DRAM POOL |   GD2GD  | ❌         | ✅         | ✅           |
-
-> [!NOTE] 说明
->
-> - L为Local，D为Device，G为Global，H为Host
-> - GH：代表一块DRAM内存，其属于DRAM内存池空间，可能在本地，也可能在远端其他节点
-> - GD：代表一块HBM显存，其属于HBM内存池空间，可能在本地，可能在远端其他节点
-> - LH：代表一块DRAM内存，其不属于任何内存池空间，其位置在当前进程
-> - LD：代表一块HBM显存，其不属于任何内存池空间，其位置在当前进程
 
 ## 🔥性能表现
 
@@ -145,42 +104,46 @@ MemFabric跨机访问数据流和控制流如下图所示(昇腾A3超节点):
 ## 🔍目录结构
 
 ```text
-├── LICENSE                    # LICENSE
-├── .clang-format              # 格式化配置
-├── .gitmodules                # 三方库git配置
-├── .gitignore                 # git忽视文件
-├── CMakeLists.txt             # 项目的CMakeList
-├── doc                        # 文档目录
+├── LICENSE                    # 许可证
+├── CMakeLists.txt             # CMake构建入口
+├── app                        # 基于MemFabric的官方应用
+│  ├── tensorRTL               # 高性能Tensor Reshard组件
+│  └── zbal                    # Zero Buffer Acceleration Library
+├── docs                       # 文档
 ├── examples                   # 样例
+│  ├── hbm_share_memory        # HBM共享内存样例(AllReduce/ShiftPutGet/RDMADemo)
+│  ├── kv_offload              # KV Offload样例
 │  ├── memory_pool             # 内存池化样例（含基础/扩展/优化/特性/可观测性）
-│  ├── transfer                # 传输样例（含batch data write/read）
-│  └── hbm_share_memory        # HBM共享内存样例(AllReduce/ShiftPutGet/RDMADemo)
-├── script                     # 构建脚本
+│  └── transfer                # 传输样例（含batch data write/read）
+├── script                     # 构建和测试脚本
 │  ├── build_and_pack_run.sh   # 编译+打包脚本
-│  ├── build.sh                # 编译脚本
-│  ├── run_ut.sh               # 编译+运行ut脚本（详见 [script/run_ut.md](script/run_ut.md)）
-├── test                       # test目录
-│  ├── 3rdparty                # 三方库
+│  ├── build.sh                # 底层编译脚本
+│  └── run_ut.sh               # 编译+运行UT脚本
+├── test                       # 测试
+│  ├── 3rdparty                # 测试依赖
 │  ├── certs                   # 证书生成脚本
-│  ├── python                  # python测试用例
+│  ├── python                  # Python测试用例
 │  └── ut                      # 单元测试用例
 ├── src                        # 源码
-│  ├── acc_links               # 内部通信层 (用于进程间控制命令的通信, 基于Host TCP实现)
-│  └── hybm                    # 内存管理与内存访问层 (Global Memory Management、Data Operation、Transport Management)
-│  └── smem                    # 语义与接口层 (big memory + transfer + share memory等语义与接口实现)
+│  ├── acc_links               # 基于Host TCP的进程间控制通信
+│  ├── acc_offload             # KV Offload与卡侧稀疏拷贝加速
+│  ├── hybm                    # 内存管理与内存访问层 (Global Memory Management、Data Operation、Transport Management)
+│  ├── smem                    # 语义与接口层 (big memory + transfer + offload + share memory等语义与接口实现)
 │  └── util                    # 公共函数
-├── README.md
+└── README.md
 ```
 
 ## 🚀快速入门
 
 请访问以下文档获取简易教程。
 
-- [编译安装](./docs/zh/installation.md)：介绍组件编译和安装教程。
+- [编译安装](./docs/zh/installation.md): 介绍组件编译和安装教程。
 
-- [DevContainer 快速入门](./docs/zh/devcontainer_quickstart.md)：VS Code Remote + DevContainer 一键环境搭建 + 全量用例运行指南。
+- [mfcli命令行工具](./docs/zh/mfcli.md): 介绍版本查询、算子管理、内存扫描和性能测试命令。
 
-- [样例执行](./examples/memory_pool/README.md)：介绍如何端到端执行样例代码，包括C++和Python样例。
+- [DevContainer 快速入门](./docs/zh/devcontainer_quickstart.md): VS Code Remote + DevContainer 一键环境搭建 + 全量用例运行指南。
+
+- [样例执行](./examples/memory_pool/README.md): 介绍如何端到端执行样例代码，包括C++和Python样例。
 
 ## 📑学习教程
 
@@ -191,30 +154,6 @@ MemFabric跨机访问数据流和控制流如下图所示(昇腾A3超节点):
 - [python接口](./docs/zh/pythonAPI.md)：python接口介绍以及python接口对应的API列表
 
 - [ptracer](./docs/zh/ptracer.md)：MemFabric内置性能打点工具简介
-
-## 📦软件硬件配套说明
-
-- 硬件型号支持
-  - Atlas 200T A2 Box16
-  - Atlas 800I A2/A3 系列产品
-  - Atlas 800T A2/A3 系列产品
-  - Atlas 900 A3 SuperPoD
-- 平台：aarch64/x86
-- 配套软件：CANN 8.1.RC1及之后版本
-- cmake >= 3.19
-- GLIBC >= 2.28
-- Ascend HDK配套驱动（npu-driver）、固件（npu-firmware）依赖(使用不同介质所需最低版本不同)：
-
-  | 特性     | HDK最低版本需求   | HDK推荐版本           |
-  |----------|--------------------|------------------------|
-  | HBM池化  | 24.1.RC2            | 24.1.RC2                     |
-  | DRAM池化 | [25.5.0](https://support.huawei.com/enterprise/zh/undefined/ascend-hdk-pid-252764743/software) | [25.5.1](https://support.huawei.com/enterprise/zh/undefined/ascend-hdk-pid-252764743/software) |
-
-  - [HDK安装指南](https://support.huawei.com/enterprise/zh/undefined/ascend-hdk-pid-252764743)
-
-- LingQu Computing Network: [1.5.0版本](https://support.huawei.com/enterprise/zh/ascend-computing/lingqu-computing-network-pid-258003841/software)，A3 DRAM池化需要配套升级1520 L1，升级指导书如下：
-  - [安装指南](https://support.huawei.com/enterprise/zh/ascend-computing/lingqu-computing-network-pid-258003841)
-  - [安装参考](./docs/zh/CCLink.md)
 
 ## 📌FAQ
 
