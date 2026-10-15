@@ -535,6 +535,9 @@ template<TemplateTypeClass>
 __aicore__ inline void CombineLowLatency<TemplateTypeFunc>::Process()
 {
     if ASCEND_IS_AIV { // 全aiv处理
+#ifdef ZBAL_ASCEND_NPU_A5
+        AscendC::SetCtrlSpr<FLOAT_OVERFLOW_MODE_CTRL, FLOAT_OVERFLOW_MODE_CTRL>(0);
+#endif
         PutShareAddr();
         SetSyncFlag(FLAG); // 全卡同步，确保对称地址都放到了meta空间
         WaitSyncFlag(FLAG);

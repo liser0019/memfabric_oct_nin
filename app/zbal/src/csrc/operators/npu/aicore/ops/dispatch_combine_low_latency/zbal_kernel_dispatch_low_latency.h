@@ -77,7 +77,13 @@ private:
     __aicore__ inline void PutShareAddr();
     __aicore__ inline void GetShareAddr();
     __aicore__ inline void SetLayoutStatus();
+#ifdef ZBAL_ASCEND_NPU_A5
+    __aicore__ inline void ResetNotifyData();
+    __aicore__ inline void NotifyWritesDone();
+    __aicore__ inline void WaitWritesDone();
+#else
     __aicore__ inline void CleanUp();
+#endif
     __aicore__ inline void ReduceMaxInplace(const LocalTensor<float> &srcLocal, uint32_t count);
     __aicore__ inline void QuantProcess();
     __aicore__ inline void QuantDynamicMx();
@@ -303,6 +309,10 @@ DispatchLowLatency<TemplateTypeFunc>::Init(GM_ADDR metaAddr, GM_ADDR x, GM_ADDR 
     shareAddrSpaceGm1_ = (GM_ADDR)(localNotifyDataSpaceGm_ + moeExpertNum_ * UB_32B_ALIGN);
     shareAddrSpaceGm2_ = (GM_ADDR)(shareAddrSpaceGm1_ + epWorldSize_ * UB_32B_ALIGN);
 
+#ifdef ZBAL_ASCEND_NPU_A5
+    // Each notification is acknowledged by clearing its slot before reuse.
+    exp_flag = 1.0f;
+#else
     // 每次调用magic++, 用来区分不同轮次
     TBuf<> tBuf;
     tpipe_->InitBuffer(tBuf, UB_32B_ALIGN);
@@ -319,6 +329,7 @@ DispatchLowLatency<TemplateTypeFunc>::Init(GM_ADDR metaAddr, GM_ADDR x, GM_ADDR 
     magicVal_ = magicValTensor_.GetValue(0);
     PipeBarrier<PIPE_ALL>();
     exp_flag = (float)magicVal_;
+#endif
 
     tpipe_->InitBuffer(notifyBuf_, UB_32B_ALIGN);
     layoutFlag_ = notifyBuf_.Get<float>();
@@ -597,10 +608,30 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::SetLayoutStatus()
         return;
     }
 
+#ifdef ZBAL_ASCEND_NPU_A5
+    TBuf<> prevFlagBuf;
+    tpipe_->InitBuffer(prevFlagBuf, UB_32B_ALIGN);
+    LocalTensor<float> prevFlagLt = prevFlagBuf.Get<float>();
+    DataCopyExtParams oneFloatParams{1U, sizeof(float), 0U, 0U, 0U};
+    DataCopyPadExtParams<float> flagPadParams{false, 0U, 0U, 0.0f};
+#endif
+
     for (uint32_t targetRankId = startRankId; targetRankId < endRankId; targetRankId++) {
         auto dstPtr = GetMetaInfoAddrByRankId(layoutStatusGm_, targetRankId);
 
         remoteLayoutStatusTensor_.SetGlobalBuffer((__gm__ float *)(dstPtr));
+#ifdef ZBAL_ASCEND_NPU_A5
+        // Wait until the peer consumed and cleared the previous round's flag before
+        // overwriting it: a premature overwrite loses this round's publication
+        // (write/clear race) or leaves the peer on stale shareAddr/putOffset.
+        float curVal = 1.0f;
+        while (curVal > 0.5f) {
+            DataCopyPad(prevFlagLt, remoteLayoutStatusTensor_[epRankId_ * FLOAT_32B_ALIGN], oneFloatParams,
+                        flagPadParams);
+            SyncFunc<AscendC::HardEvent::MTE2_S>();
+            curVal = prevFlagLt.GetValue(0);
+        }
+#endif
         DataCopyExtParams layoutStatusCopyParams{1U, sizeof(float), 0U, 0U, 0U};
         DataCopyPad(remoteLayoutStatusTensor_[epRankId_ * FLOAT_32B_ALIGN], statusTensor_, layoutStatusCopyParams);
     }
@@ -618,17 +649,30 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::SendCountNotify()
 
     layoutStatusTensor_.SetGlobalBuffer((__gm__ float *)(layoutStatusGm_));
     tpipe_->InitBuffer(layoutWaitStatusBuf_, 32); // only 32B
+#ifdef ZBAL_ASCEND_NPU_A5
+    DataCopyExtParams clearFlagParams{1U, sizeof(float), 0U, 0U, 0U};
+#endif
     // 分核交换不同 Rank 的 SendCount 以及 OutputTensor 的 Addr
     for (uint32_t targetRankId = startRankId; targetRankId < endRankId; targetRankId++) {
         float curVal = static_cast<float>(-1.0);
         layoutStatusFp32Tensor_ = layoutWaitStatusBuf_.Get<float>();
         // only check current targetRank
+#ifdef ZBAL_ASCEND_NPU_A5
+        DataCopyExtParams intriParams{1U, sizeof(float), 0U, 0U, 0U};
+        DataCopyPadExtParams<float> flagPadParams{false, 0U, 0U, 0.0f};
+#else
         DataCopyParams intriParams{1, static_cast<uint16_t>(1 * sizeof(float)), 0, 0};
+#endif
         // use approximated targetSumFlag
         float minFlagVal = exp_flag - (float)0.5;
         float maxFlagVal = exp_flag + (float)0.5;
         while ((curVal < minFlagVal) || (curVal > maxFlagVal)) {
+#ifdef ZBAL_ASCEND_NPU_A5
+            DataCopyPad(layoutStatusFp32Tensor_, layoutStatusTensor_[targetRankId * FLOAT_32B_ALIGN], intriParams,
+                        flagPadParams);
+#else
             DataCopy(layoutStatusFp32Tensor_, layoutStatusTensor_[targetRankId * FLOAT_32B_ALIGN], intriParams);
+#endif
             SyncFunc<AscendC::HardEvent::MTE2_S>();
             curVal = layoutStatusFp32Tensor_.GetValue(0);
         }
@@ -654,6 +698,15 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::SendCountNotify()
         CpGM2GM(remoteMetaAddrGt2, localMetaAddrGt2, 1);
 
         PipeBarrier<PIPE_ALL>();
+
+#ifdef ZBAL_ASCEND_NPU_A5
+        // Acknowledge this round's publication: clear the slot so the peer can
+        // republish next round without losing the flag to an overwrite.
+        layoutStatusFp32Tensor_.SetValue(0, 0.0f);
+        SyncFunc<AscendC::HardEvent::S_MTE3>();
+        DataCopyPad(layoutStatusTensor_[targetRankId * FLOAT_32B_ALIGN], layoutStatusFp32Tensor_, clearFlagParams);
+        PipeBarrier<PIPE_ALL>();
+#endif
     }
     SyncFunc<AscendC::HardEvent::MTE3_S>();
 }
@@ -980,6 +1033,9 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::QuantProcess()
     floatLocalTemp = receiveDataCastFloatBuf_.Get<float>();
 
     Cast(floatLocalTemp, xInTensor_, RoundMode::CAST_NONE, axisH_);
+#ifdef ZBAL_ASCEND_NPU_A5
+    SyncFunc<AscendC::HardEvent::V_S>();
+#endif
     xInQueue_.FreeTensor<XType>(xInTensor_);
     PipeBarrier<PIPE_V>();
 
@@ -1048,6 +1104,92 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::NotifyBufInit()
     tpipe_->InitBuffer(notiStatusBuf_, UB_ALIGN * 3);            // 96B
 }
 
+#ifdef ZBAL_ASCEND_NPU_A5
+// Clear counts before LocalLayout starts its atomic accumulation.
+template<TemplateTypeClass>
+__aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::ResetNotifyData()
+{
+    if (aivId_ != 0) {
+        return;
+    }
+    clearAlign_ = Ceil(moeExpertNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN;
+    tpipe_->InitBuffer(CleartBuf, clearAlign_);
+    LocalNotifyDataTensor_.SetGlobalBuffer((__gm__ int32_t *)(localNotifyDataSpaceGm_));
+    LocalTensor<int32_t> cleanTempLt_ = CleartBuf.GetWithOffset<int32_t>(moeExpertNum_, 0);
+    Duplicate<int32_t>(cleanTempLt_, 0, moeExpertNum_);
+    PipeBarrier<PIPE_ALL>();
+    DataCopy(LocalNotifyDataTensor_, cleanTempLt_, moeExpertNum_);
+    PipeBarrier<PIPE_ALL>();
+}
+
+// Publish completion after all local cores finish; acknowledge before reusing a slot.
+template<TemplateTypeClass>
+__aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::NotifyWritesDone()
+{
+    uint32_t rankNumPerBlock = 0U, startRankId = 0U, endRankId = 0U;
+    SplitToCore(epWorldSize_, moeUsedAivNum_, startRankId, endRankId, rankNumPerBlock);
+    if (rankNumPerBlock == 0U) {
+        return;
+    }
+
+    PipeBarrier<PIPE_ALL>();
+    TBuf<> doneBuf;
+    tpipe_->InitBuffer(doneBuf, UB_32B_ALIGN);
+    LocalTensor<float> doneLt = doneBuf.Get<float>();
+    DataCopyExtParams oneFloatParams{1U, sizeof(float), 0U, 0U, 0U};
+    DataCopyPadExtParams<float> flagPadParams{false, 0U, 0U, 0.0f};
+    for (uint32_t targetRankId = startRankId; targetRankId < endRankId; targetRankId++) {
+        auto dstPtr = GetMetaInfoAddrByRankId(layoutStatusGm_, targetRankId);
+        remoteLayoutStatusTensor_.SetGlobalBuffer((__gm__ float *)(dstPtr));
+        float curVal = 1.0f;
+        while (curVal > 0.5f) {
+            DataCopyPad(doneLt, remoteLayoutStatusTensor_[epRankId_ * FLOAT_32B_ALIGN + 1], oneFloatParams,
+                        flagPadParams);
+            SyncFunc<AscendC::HardEvent::MTE2_S>();
+            curVal = doneLt.GetValue(0);
+        }
+        doneLt.SetValue(0, 1.0f);
+        SyncFunc<AscendC::HardEvent::S_MTE3>();
+        DataCopyExtParams doneCopyParams{1U, sizeof(float), 0U, 0U, 0U};
+        DataCopyPad(remoteLayoutStatusTensor_[epRankId_ * FLOAT_32B_ALIGN + 1], doneLt, doneCopyParams);
+        SyncFunc<AscendC::HardEvent::MTE3_MTE2>();
+    }
+    SyncFunc<AscendC::HardEvent::MTE3_S>();
+}
+
+// Wait until every assigned peer has finished writing this rank's window (its consumer
+// starts right after kernel exit), then clear each done slot to ack the peer for the next round.
+template<TemplateTypeClass>
+__aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::WaitWritesDone()
+{
+    uint32_t rankNumPerBlock = 0U, startRankId = 0U, endRankId = 0U;
+    SplitToCore(epWorldSize_, moeUsedAivNum_, startRankId, endRankId, rankNumPerBlock);
+    if (rankNumPerBlock == 0U) {
+        return;
+    }
+    layoutStatusTensor_.SetGlobalBuffer((__gm__ float *)(layoutStatusGm_));
+    TBuf<> doneWaitBuf;
+    tpipe_->InitBuffer(doneWaitBuf, UB_32B_ALIGN);
+    LocalTensor<float> doneWaitLt = doneWaitBuf.Get<float>();
+    DataCopyExtParams oneFloatParams{1U, sizeof(float), 0U, 0U, 0U};
+    DataCopyPadExtParams<float> flagPadParams{false, 0U, 0U, 0.0f};
+    DataCopyExtParams clearCopyParams{1U, sizeof(float), 0U, 0U, 0U};
+    for (uint32_t targetRankId = startRankId; targetRankId < endRankId; targetRankId++) {
+        float curVal = 0.0f;
+        while (((curVal < 0.5f) || (curVal > 1.5f))) {
+            DataCopyPad(doneWaitLt, layoutStatusTensor_[targetRankId * FLOAT_32B_ALIGN + 1], oneFloatParams,
+                        flagPadParams);
+            SyncFunc<AscendC::HardEvent::MTE2_S>();
+            curVal = doneWaitLt.GetValue(0);
+        }
+        doneWaitLt.SetValue(0, 0.0f);
+        SyncFunc<AscendC::HardEvent::S_MTE3>();
+        DataCopyPad(layoutStatusTensor_[targetRankId * FLOAT_32B_ALIGN + 1], doneWaitLt, clearCopyParams);
+        SyncFunc<AscendC::HardEvent::MTE3_MTE2>();
+    }
+    SyncFunc<AscendC::HardEvent::MTE3_S>();
+}
+#else
 template<TemplateTypeClass>
 __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::CleanUp()
 {
@@ -1064,11 +1206,17 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::CleanUp()
         PipeBarrier<PIPE_ALL>();
     }
 }
+#endif
 
 template<TemplateTypeClass>
 __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::Process()
 {
     if ASCEND_IS_AIV { // 全aiv处理
+#ifdef ZBAL_ASCEND_NPU_A5
+        AscendC::SetCtrlSpr<FLOAT_OVERFLOW_MODE_CTRL, FLOAT_OVERFLOW_MODE_CTRL>(0);
+        ResetNotifyData();
+        SyncAll<true>();
+#endif
         LocalLayout();
         SyncAll<true>();
         SetLayoutStatus(); // set local Rank flag to all remote Ranks
@@ -1077,7 +1225,15 @@ __aicore__ inline void DispatchLowLatency<TemplateTypeFunc>::Process()
         WaitNotify();
         SyncAll<true>();
         InputToDstOutput();
+#ifdef ZBAL_ASCEND_NPU_A5
+        // Drain this core's MTE3 window writes; NotifyWritesDone publishes only after they land
+        PipeBarrier<PIPE_ALL>();
+        SyncAll<true>();    // Every local core must finish before publishing completion.
+        NotifyWritesDone(); // Publish this rank's writes-done flag to assigned peers
+        WaitWritesDone();   // Wait for all peers' writes-done before the kernel exits
+#else
         CleanUp();
+#endif
     }
 }
 
