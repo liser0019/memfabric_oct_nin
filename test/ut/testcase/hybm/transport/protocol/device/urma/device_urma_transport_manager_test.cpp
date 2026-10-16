@@ -1573,7 +1573,7 @@ TEST(DeviceUrmaTransportManagerTest, OpenDeviceInitializesResourcesAndCloseClean
     EXPECT_EQ(manager.superPodId_, 5U);
     ASSERT_NE(manager.localEndpoint_.empty(), true);
     EXPECT_NE(manager.localEndpoint_[0], nullptr);
-    EXPECT_NE(manager.devTransFlagPtr_[0], nullptr);
+    EXPECT_NE(manager.devTransFlagPtr_, nullptr);
     EXPECT_EQ(manager.devTransFlagSize_, sizeof(int64_t));
     EXPECT_EQ(manager.devTransFlagHcommHandle_[0], MOCK_FLAG_HANDLE);
     EXPECT_TRUE(manager.deviceKernelLoaded_);
@@ -1582,7 +1582,7 @@ TEST(DeviceUrmaTransportManagerTest, OpenDeviceInitializesResourcesAndCloseClean
     EXPECT_EQ(manager.CloseDevice(), BM_OK);
     EXPECT_FALSE(manager.opened_);
     EXPECT_TRUE(manager.localEndpoint_.empty());
-    EXPECT_TRUE(manager.devTransFlagPtr_.empty());
+    EXPECT_EQ(manager.devTransFlagPtr_, nullptr);
     EXPECT_TRUE(manager.devTransFlagHcommHandle_.empty());
 }
 
@@ -1757,7 +1757,7 @@ TEST(DeviceUrmaTransportManagerTest, OpenDeviceRollsBackWhenFlagMemcpyFails)
     EXPECT_EQ(manager.OpenDevice(options), BM_ERROR);
     EXPECT_FALSE(manager.opened_);
     EXPECT_TRUE(manager.localEndpoint_.empty());
-    EXPECT_TRUE(manager.devTransFlagPtr_.empty());
+    EXPECT_EQ(manager.devTransFlagPtr_, nullptr);
 }
 
 TEST(DeviceUrmaTransportManagerTest, OpenDeviceRejectsInvalidOptionsAndUnsupportedSoc)
@@ -2271,12 +2271,12 @@ TEST(DeviceUrmaTransportManagerTest, CloseDeviceReleasesRemoteLocalAndDeviceReso
     manager.opened_ = true;
     manager.localEndpoint_.push_back(MOCK_ENDPOINT);
     ASSERT_NE(manager.localEndpoint_[0], nullptr);
-    manager.devTransFlagPtr_.push_back(std::malloc(sizeof(int64_t)));
-    ASSERT_NE(manager.devTransFlagPtr_[0], nullptr);
+    manager.devTransFlagPtr_ = std::malloc(sizeof(int64_t));
+    ASSERT_NE(manager.devTransFlagPtr_, nullptr);
     manager.devTransFlagSize_ = sizeof(int64_t);
     HcommMemHandle flagHandle = nullptr;
     HcommCommMem flagMem{COMM_MEM_TYPE_DEVICE,
-                         reinterpret_cast<void *>(reinterpret_cast<uint64_t>(manager.devTransFlagPtr_[0])),
+                         reinterpret_cast<void *>(reinterpret_cast<uint64_t>(manager.devTransFlagPtr_)),
                          sizeof(int64_t)};
     ASSERT_EQ(manager.hcommApi_.RegisterMemory(manager.localEndpoint_[0], 1, flagMem, flagHandle), BM_OK);
     manager.devTransFlagHcommHandle_.push_back(flagHandle);
@@ -2332,7 +2332,7 @@ TEST(DeviceUrmaTransportManagerTest, CloseDeviceReleasesRemoteLocalAndDeviceReso
     EXPECT_TRUE(manager.remoteRanks_.empty());
     EXPECT_TRUE(manager.localRegistrations_.empty());
     EXPECT_TRUE(manager.localEndpoint_.empty());
-    EXPECT_TRUE(manager.devTransFlagPtr_.empty());
+    EXPECT_EQ(manager.devTransFlagPtr_, nullptr);
     EXPECT_TRUE(manager.devTransFlagHcommHandle_.empty());
 }
 
@@ -3086,8 +3086,8 @@ TEST(DeviceUrmaTransportManagerTest, RegisterMemoryRegionTracksRefCountAndQueryM
     manager.localEndpoint_.push_back(MOCK_ENDPOINT);
     ASSERT_NE(manager.localEndpoint_[0], nullptr);
     manager.devTransFlagHcommHandle_.push_back(MOCK_FLAG_HANDLE);
-    manager.devTransFlagPtr_.push_back(std::malloc(sizeof(int64_t)));
-    ASSERT_NE(manager.devTransFlagPtr_[0], nullptr);
+    manager.devTransFlagPtr_ = std::malloc(sizeof(int64_t));
+    ASSERT_NE(manager.devTransFlagPtr_, nullptr);
     manager.devTransFlagSize_ = sizeof(int64_t);
 
     TransportMemoryRegion mr{};
@@ -3119,11 +3119,10 @@ TEST(DeviceUrmaTransportManagerTest, RegisterMemoryRegionTracksRefCountAndQueryM
     EXPECT_TRUE(manager.localRegistrations_.empty());
     // Free manually allocated devTransFlagPtr_, then nullify handles set directly
     // (not via HcommMemReg) to avoid double-cleanup in destructor.
-    (void)DlAclApi::AclrtFree(manager.devTransFlagPtr_[0]);
+    (void)DlAclApi::AclrtFree(manager.devTransFlagPtr_);
     manager.devTransFlagHcommHandle_[0] = nullptr;
     manager.devTransFlagHcommHandle_.clear();
-    manager.devTransFlagPtr_[0] = nullptr;
-    manager.devTransFlagPtr_.clear();
+    manager.devTransFlagPtr_ = nullptr;
 }
 
 TEST(DeviceUrmaTransportManagerTest, RegisterMemoryRegionPropagatesHcommRegFailure)

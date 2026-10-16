@@ -692,6 +692,36 @@ TEST_F(UrmaTopoManagerTest, ParseEdgeList_FiltersByLocalId)
     EXPECT_EQ(edges[0].localAPorts[0], "0/0");
 }
 
+TEST_F(UrmaTopoManagerTest, ParseTopoInfo_SupportsPeer2PeerAndPeer2NetConsumers)
+{
+    auto &mgr = UrmaTopoManager::GetInstance();
+    auto &rank = AddLocalRank(mgr);
+    AddEidAddr(rank, kMeshLayer, "22222222222222222222222222222222", {"1/7"});
+    rank.levelList.back().netType = NET_TYPE_TOPO_FILE_DESC;
+    AddEidAddr(rank, kCtpLayer, "33333333333333333333333333333333", {"1/8"});
+    rank.levelList.back().netType = NET_TYPE_CLOS;
+    std::string json = R"({"edge_count":2,"peer_list":[],"edge_list":[)"
+                       R"({"net_layer":0,"link_type":"PEER2PEER","local_a":7,"local_b":0,)"
+                       R"("local_a_ports":["0/6"],"local_b_ports":["1/7"]},)"
+                       R"({"net_layer":1,"link_type":"PEER2NET","local_a":0,"local_a_ports":["1/8"],)"
+                       R"("protocols":["UB_CTP"],"position":"DEVICE"}]})";
+
+    EXPECT_EQ(mgr.ParseTopoInfo(json, mgr.topoInfo_), BM_OK);
+    ASSERT_EQ(mgr.topoInfo_.edgeList.size(), 2U);
+    EXPECT_EQ(mgr.BuildPeer2PeerMap(), BM_OK);
+    ASSERT_EQ(mgr.peer2PeerMap_.size(), 1U);
+    const auto peer = mgr.peer2PeerMap_.find(7);
+    ASSERT_NE(peer, mgr.peer2PeerMap_.end());
+    std::array<uint8_t, COMM_ADDR_EID_LEN> expected{};
+    expected.fill(0x22U);
+    EXPECT_EQ(peer->second, expected);
+
+    std::array<uint8_t, COMM_ADDR_EID_LEN> eid{};
+    EXPECT_EQ(mgr.GetPeer2NetEid(COMM_PROTOCOL_UBC_CTP, eid), BM_OK);
+    expected.fill(0x33U);
+    EXPECT_EQ(eid, expected);
+}
+
 TEST_F(UrmaTopoManagerTest, ParseEdgeList_NoMatch)
 {
     auto &mgr = UrmaTopoManager::GetInstance();

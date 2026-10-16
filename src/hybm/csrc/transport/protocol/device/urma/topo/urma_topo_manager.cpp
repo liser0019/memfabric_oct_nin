@@ -311,7 +311,7 @@ Result UrmaTopoManager::ParseEdgeList(const std::string &json, std::vector<Edge>
             return vr.result;
         }
         std::string edgeJson(begin + pos, vr.offset - pos);
-        Edge edge;
+        Edge edge{};
         (void)device::ExtractStrField(edgeJson, "\"link_type\"", edge.linkType);
         (void)device::ExtractStrField(edgeJson, "\"topo_type\"", edge.topoType);
         (void)device::ExtractStrField(edgeJson, "\"topo_attr\"", edge.topoAttr);
@@ -323,7 +323,7 @@ Result UrmaTopoManager::ParseEdgeList(const std::string &json, std::vector<Edge>
         (void)device::ParseStrArray(edgeJson, "\"local_a_ports\"", edge.localAPorts);
         (void)device::ParseStrArray(edgeJson, "\"local_b_ports\"", edge.localBPorts);
         (void)device::ParseStrArray(edgeJson, "\"protocols\"", edge.protocols);
-        if ((edge.localA == localId_ || edge.localB == localId_) && edge.linkType == "PEER2PEER") {
+        if (edge.localA == localId_ || edge.localB == localId_) {
             edgeList.push_back(std::move(edge));
         }
         pos = vr.offset;
@@ -490,14 +490,16 @@ Result UrmaTopoManager::BuildPeer2PeerMap()
     }
     const auto &rank = rootInfo_.rankList[0];
     for (const auto &edge : topoInfo_.edgeList) {
-        if (edge.localA != localId_ && edge.localB != localId_) {
+        if (edge.linkType != "PEER2PEER" || (edge.localA != localId_ && edge.localB != localId_)) {
             continue;
         }
-        for (const auto &edgePort : edge.localAPorts) {
+        const bool localIsA = edge.localA == localId_;
+        const auto &localPorts = localIsA ? edge.localAPorts : edge.localBPorts;
+        for (const auto &edgePort : localPorts) {
             std::array<uint8_t, COMM_ADDR_EID_LEN> eid{};
             bool found = false;
             for (const auto &level : rank.levelList) {
-                if (level.netType == "COLS") {
+                if (level.netType == NET_TYPE_CLOS) {
                     continue;
                 }
                 for (const auto &addr : level.rankAddrList) {
@@ -512,7 +514,7 @@ Result UrmaTopoManager::BuildPeer2PeerMap()
                 }
             }
             if (found) {
-                if (edge.localA == localId_) {
+                if (localIsA) {
                     peer2PeerMap_[edge.localB] = eid;
                 } else {
                     peer2PeerMap_[edge.localA] = eid;

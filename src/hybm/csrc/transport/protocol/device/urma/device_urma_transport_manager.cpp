@@ -509,15 +509,14 @@ Result DeviceUrmaTransportManager::InitDeviceTransferFlagLocked()
     HcommMemHandle flagHandle = nullptr;
     auto hcommFlagMem = ToHcommMem(flagMem);
     uint64_t memTag = reinterpret_cast<uint64_t>(flagPtr);
+    devTransFlagPtr_ = flagPtr;
+    devTransFlagSize_ = sizeof(int64_t);
     for (auto &localEndpoint : localEndpoint_) {
         ret = hcommApi_.RegisterMemory(localEndpoint, memTag, hcommFlagMem, flagHandle);
         if (ret != BM_OK) {
             BM_LOG_ERROR("device_urma HcommMemReg for local flag buffer failed, ret: " << ret);
-            (void)DlAclApi::AclrtFree(flagPtr);
             return ret;
         }
-        devTransFlagPtr_.push_back(flagPtr);
-        devTransFlagSize_ = sizeof(int64_t);
         devTransFlagHcommHandle_.push_back(flagHandle);
         BM_LOG_INFO("device_urma local flag buffer allocated and registered, addr: "
                     << VaToStr(flagPtr) << " size: " << devTransFlagSize_ << " handle: " << flagHandle
@@ -686,13 +685,10 @@ void DeviceUrmaTransportManager::RollbackOpenDeviceLocked()
         }
     }
     devTransFlagHcommHandle_.clear();
-    if (!devTransFlagPtr_.empty()) {
-        for (auto &devTransFlagPtr : devTransFlagPtr_) {
-            (void)DlAclApi::AclrtFree(devTransFlagPtr);
-            devTransFlagPtr = nullptr;
-        }
+    if (devTransFlagPtr_ != nullptr) {
+        (void)DlAclApi::AclrtFree(devTransFlagPtr_);
+        devTransFlagPtr_ = nullptr;
     }
-    devTransFlagPtr_.clear();
     if (!localEndpoint_.empty()) {
         for (auto &localEndpoint : localEndpoint_) {
             if (localEndpoint != nullptr) {
@@ -1093,16 +1089,13 @@ void DeviceUrmaTransportManager::CloseDeviceCleanupResourcesLocked()
 
     localIds_.clear();
 
-    if (!devTransFlagPtr_.empty()) {
-        for (auto &devTransFlagPtr : devTransFlagPtr_) {
-            auto ret = DlAclApi::AclrtFree(devTransFlagPtr);
-            if (ret != BM_OK) {
-                BM_LOG_ERROR("device_urma CloseDeviceCleanupResources AclrtFree devTransFlag failed, ret: " << ret);
-            }
-            devTransFlagPtr = nullptr;
+    if (devTransFlagPtr_ != nullptr) {
+        auto ret = DlAclApi::AclrtFree(devTransFlagPtr_);
+        if (ret != BM_OK) {
+            BM_LOG_ERROR("device_urma CloseDeviceCleanupResources AclrtFree devTransFlag failed, ret: " << ret);
         }
+        devTransFlagPtr_ = nullptr;
     }
-    devTransFlagPtr_.clear();
     deviceKernelLoaded_ = false;
 }
 

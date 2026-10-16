@@ -445,7 +445,7 @@ private:
     aclrtBinHandle deviceKernelHandle_{nullptr};
     DeviceFuncHandles deviceFuncHandles_{};
     // Local flag buffer allocated via AclrtMalloc in OpenDevice, initialised to 1.
-    std::vector<void *> devTransFlagPtr_;
+    void *devTransFlagPtr_{nullptr};
     uint64_t devTransFlagSize_{0};
     std::vector<HcommMemHandle> devTransFlagHcommHandle_;
     std::unique_ptr<NotifyResource *[]> notifyPoolSlots_{}; // manager 级池，下标到稳定资源地址的只增映射
