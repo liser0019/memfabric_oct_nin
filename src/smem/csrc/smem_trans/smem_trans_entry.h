@@ -91,7 +91,8 @@ using Local2GlobalMap = std::map<const void *, LocalMapAddress, std::greater<con
 class SmemTransEntry : public SmReferable {
 public:
     static SmemTransEntryPtr Create(const std::string &name, const std::string &storeUrl,
-                                    const smem_trans_config_t &config);
+                                    const smem_trans_config_t &config,
+                                    const std::vector<std::pair<const void *, size_t>> &initialMemories = {});
 
 public:
     explicit SmemTransEntry(const smem_trans_config_t &config, std::string &name, uint32_t rank, uint32_t id,
@@ -171,6 +172,9 @@ private:
     void RemoveRanks(std::vector<uint32_t> &rankSet);
     Result ParseNameToUniqueId(const std::string &name, WorkerId &uniqueId);
     Result RegisterOneMemory(const void *address, uint64_t size, uint32_t flags);
+    // Caller holds memMutex_, or the entry is not yet exposed to users.
+    Result PrepareLocalMemories(const std::vector<std::pair<const void *, size_t>> &regMemories, uint32_t flags);
+    void ClearRegisteredInfos();
     hybm_options GenerateHybmOptions();
     Result TransformAddr(Local2GlobalMap &maps, std::vector<void *> &addr, void *remoteAddrs[],
                          const size_t dataSizes[], uint32_t size);

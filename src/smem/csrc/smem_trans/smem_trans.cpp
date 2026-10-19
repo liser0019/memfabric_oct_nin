@@ -60,16 +60,32 @@ SMEM_API int32_t smem_trans_init(const smem_trans_config_t *config)
 
 SMEM_API smem_trans_t smem_trans_create(const char *store_url, const char *unique_id, const smem_trans_config_t *config)
 {
+    return smem_trans_create_with_memories(store_url, unique_id, config, nullptr, nullptr, 0U);
+}
+
+SMEM_API smem_trans_t smem_trans_create_with_memories(const char *store_url, const char *unique_id,
+                                                     const smem_trans_config_t *config, void *const addresses[],
+                                                     const size_t capacities[], uint32_t count)
+{
     SM_VALIDATE_RETURN(g_smemTransInited, "smem trans not initialized yet", nullptr);
     SM_VALIDATE_RETURN(store_url != nullptr, "invalid store_url, which is null", nullptr);
     SM_VALIDATE_RETURN(unique_id != nullptr, "invalid unique_id, which is null", nullptr);
     SM_VALIDATE_RETURN(config != nullptr, "invalid config, which is null", nullptr);
     SM_VALIDATE_RETURN(strlen(store_url) != 0, "invalid store_url, which is empty", nullptr);
     SM_VALIDATE_RETURN(strlen(unique_id) != 0, "invalid engineId, which is empty", nullptr);
+    SM_VALIDATE_RETURN(count == 0U || (addresses != nullptr && capacities != nullptr),
+                       "initial memory arrays are null, count: " << count, nullptr);
+    std::vector<std::pair<const void *, size_t>> initialMemories;
+    initialMemories.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        SM_VALIDATE_RETURN(addresses[i] != nullptr && capacities[i] != 0U,
+                           "invalid initial memory, index: " << i << " capacity: " << capacities[i], nullptr);
+        initialMemories.emplace_back(addresses[i], capacities[i]);
+    }
     WriteGuard transLock(g_smemTransMutex_);
 
     /* create entry */
-    auto entry = SmemTransEntry::Create(unique_id, store_url, *config);
+    auto entry = SmemTransEntry::Create(unique_id, store_url, *config, initialMemories);
     if (entry == nullptr) {
         SM_LOG_ERROR("create entity happen error.");
         return nullptr;

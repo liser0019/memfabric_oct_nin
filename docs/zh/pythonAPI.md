@@ -599,6 +599,12 @@ class TransferEngine:
 |batch_transfer_write_with_quant参数stream|需要提交到的acl.rt.stream，默认0|
 |batch_transfer_write_with_quant参数flags|标记位，默认0|
 
+A5 DEVICE_URMA 初始注册约束：在第一次传输之前，完成 `register_memory` / `batch_register_memory`。
+延迟连接会在 Join 前注册该快照，重连也使用当前快照。Python 方法签名保持不变。
+连接创建与注册操作串行化，避免在快照和连接发布之间遗漏内存。
+已存在的重复注册可复用；连接建立后新增区域返回错误，不将 Host 侧更新成功视为 AICPU 表已刷新。
+`unregister_memory` 的底层原实现尚未真正注销 MR，不能据此立即释放仍被连接引用的数据内存。
+
 #### TransDataOpType枚举类
 
 ```python

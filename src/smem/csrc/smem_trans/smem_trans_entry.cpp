@@ -53,7 +53,8 @@ constexpr int8_t TRANS_LINK_IDLE = 0;
 constexpr int8_t TRANS_LINK_CONNECTED = 4;
 
 SmemTransEntryPtr SmemTransEntry::Create(const std::string &name, const std::string &storeUrl,
-                                         const smem_trans_config_t &config)
+                                         const smem_trans_config_t &config,
+                                         const std::vector<std::pair<const void *, size_t>> &initialMemories)
 {
     /* create entry and initialize */
     SmemTransEntryPtr transEntry;
@@ -71,7 +72,15 @@ SmemTransEntryPtr SmemTransEntry::Create(const std::string &name, const std::str
         return nullptr;
     }
 
+    result = transEntry->PrepareLocalMemories(initialMemories, 0U);
+    if (result != SM_OK) {
+        SM_LOG_AND_SET_LAST_ERROR("initial memory registration failed, name: " << name << " result: " << result);
+        SmemTransEntryManager::Instance().RemoveEntryByPtr(reinterpret_cast<uintptr_t>(transEntry.Get()));
+        return nullptr;
+    }
+
     result = transEntry->Join(0);
+    transEntry->ClearRegisteredInfos();
     if (result != SM_OK) {
         SM_LOG_AND_SET_LAST_ERROR("trans join failed, ret:" << result);
         SmemTransEntryManager::Instance().RemoveEntryByPtr(reinterpret_cast<uintptr_t>(transEntry.Get()));
@@ -160,6 +169,8 @@ void SmemTransEntry::UnInitialize()
         nameToWorkerId_.clear();
     }
 
+    ClearRegisteredInfos();
+    exportedSliceIds_.clear();
     hybm_export_info_free(&entityInfo_.hybmInfo);
 
     if (entity_ != nullptr) {
@@ -865,73 +876,73 @@ Result SmemTransEntry::RegisterLocalMemory(const void *address, uint64_t size, u
     return RegisterLocalMemories(regMemories, flags);
 }
 
-Result SmemTransEntry::RegisterLocalMemories(const std::vector<std::pair<const void *, size_t>> &regMemories,
+void SmemTransEntry::ClearRegisteredInfos()
+{
+    for (auto &info : registedInfo_) {
+        hybm_export_info_free(&info.hybmInfo);
+    }
+    registedInfo_.clear();
+}
+
+Result SmemTransEntry::PrepareLocalMemories(const std::vector<std::pair<const void *, size_t>> &regMemories,
                                              uint32_t flags)
 {
     if (entity_ == nullptr) {
-        SM_LOG_ERROR("not create entity.");
+        SM_LOG_ERROR("cannot register memory before entity initialization, rankId: " << rankId_);
         return SM_ERROR;
     }
-
     if (regMemories.empty()) {
         return SM_OK;
     }
-
-    for (auto it : regMemories) {
-        if (it.first == nullptr || it.second == 0) {
-            SM_LOG_ERROR("input address or size invalid, address: " << it.first << " size: " << it.second);
+    auto alignedMemories = regMemories;
+    for (auto &memory : alignedMemories) {
+        if (memory.first == nullptr || memory.second == 0U) {
+            SM_LOG_ERROR("invalid memory, rankId: " << rankId_ << " address: " << memory.first
+                                                   << " size: " << memory.second);
             return SM_INVALID_PARAM;
         }
+        AlignMemory(memory.first, memory.second);
     }
-
-    auto alignedMemories = regMemories;
-    for (auto &it : alignedMemories) {
-        AlignMemory(it.first, it.second);
-    }
-    auto mm = CombineMemories(alignedMemories);
-    std::unique_lock<std::mutex> uniqueLock{memMutex_};
-    for (auto &m : mm) {
-        auto ret = RegisterOneMemory(m.first, m.second, flags);
-        if (ret != 0) {
-            for (auto &info : registedInfo_) {
-                hybm_export_info_free(&info.hybmInfo);
-            }
-            registedInfo_.clear();
+    for (const auto &memory : CombineMemories(alignedMemories)) {
+        auto ret = RegisterOneMemory(memory.first, memory.second, flags);
+        if (ret != SM_OK) {
             return ret;
         }
     }
-    // Pack and send new slices to server for propagation to all peers
+    return SM_OK;
+}
+
+Result SmemTransEntry::RegisterLocalMemories(const std::vector<std::pair<const void *, size_t>> &regMemories,
+                                             uint32_t flags)
+{
+    std::unique_lock<std::mutex> uniqueLock{memMutex_};
+    auto ret = PrepareLocalMemories(regMemories, flags);
+    if (ret != SM_OK) {
+        ClearRegisteredInfos();
+        return ret;
+    }
+    if (registedInfo_.empty()) {
+        return SM_OK;
+    }
     MultiBytes newSlices;
     for (const auto &info : registedInfo_) {
         Bytes bytes;
         SerializeTransExchangeInfo(bytes, info);
         newSlices.emplace_back(std::move(bytes));
     }
-
     auto coreStore = store_->GetCoreStore();
     auto groupMgr = dynamic_cast<SmemGroupManager *>(coreStore.Get());
     if (groupMgr == nullptr) {
-        SM_LOG_ERROR("RegisterLocalMemories: group manager is nullptr");
-        for (auto &info : registedInfo_) {
-            hybm_export_info_free(&info.hybmInfo);
-        }
-        registedInfo_.clear();
+        SM_LOG_ERROR("RegisterLocalMemories: group manager is null, rankId: " << rankId_);
+        ClearRegisteredInfos();
         return SM_ERROR;
     }
-
-    if (auto ret = groupMgr->ExtendMemory(newSlices); ret != SM_OK) {
-        SM_LOG_ERROR("RegisterLocalMemories: ExtendMemory failed, ret=" << ret);
-        for (auto &info : registedInfo_) {
-            hybm_export_info_free(&info.hybmInfo);
-        }
-        registedInfo_.clear();
-        return SM_ERROR;
+    ret = groupMgr->ExtendMemory(newSlices);
+    ClearRegisteredInfos();
+    if (ret != SM_OK) {
+        SM_LOG_ERROR("RegisterLocalMemories: ExtendMemory failed, rankId: " << rankId_ << " ret: " << ret);
+        return ret;
     }
-
-    for (auto &info : registedInfo_) {
-        hybm_export_info_free(&info.hybmInfo);
-    }
-    registedInfo_.clear();
     return SM_OK;
 }
 
@@ -1182,7 +1193,7 @@ Result SmemTransEntry::RegisterOneMemory(const void *address, uint64_t size, uin
     // 此处按 ID 去重：已 export 过的 slice 不再生成/广播交换记录，避免对端出现
     // "整段 handle + 子块 u.address" 的错配记录
     const auto sliceKey = reinterpret_cast<uint64_t>(slice);
-    if (!exportedSliceIds_.insert(sliceKey).second) {
+    if (exportedSliceIds_.count(sliceKey) != 0U) {
         SM_LOG_INFO("fake register, skip duplicated export: address: " << address << " size: " << size);
         return SM_OK;
     }
@@ -1210,6 +1221,7 @@ Result SmemTransEntry::RegisterOneMemory(const void *address, uint64_t size, uin
     }
 
     info.u.address = LocalMapAddress(sliceVa, sliceSize);
+    exportedSliceIds_.insert(sliceKey);
     registedInfo_.emplace_back(info);
     return SM_OK;
 }

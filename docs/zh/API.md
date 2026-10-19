@@ -831,6 +831,25 @@ smem_trans_t smem_trans_create(const char *storeUrl, const char *uniqueId, const
 |config|TRANS初始化配置|
 |返回值|成功返回 TRANS 实例句柄，失败返回 NULL|
 
+#### smem_trans_create_with_memories
+
+创建 TRANS 实例，并在 Join 之前完成初始内存注册、导出，通过 Join 的 `externalInfo` 发布给对端。
+原 `smem_trans_create` 等价于初始内存数量为零，签名和行为保持兼容。
+
+```c
+smem_trans_t smem_trans_create_with_memories(const char *storeUrl, const char *uniqueId,
+                                            const smem_trans_config_t *config, void *const addresses[],
+                                            const size_t capacities[], uint32_t count);
+```
+
+`storeUrl`、`uniqueId`、`config` 与 `smem_trans_create` 相同。`addresses` 和 `capacities` 分别为初始地址和
+字节数数组，长度为 `count`；地址及字节数必须非零。`count=0` 时两个数组可为 NULL。
+成功返回句柄；初始化、注册或 Join 失败返回 NULL，销毁半成品实例及其注册资源。
+数据内存仍由调用方拥有，必须保留到 TRANS 销毁之后。
+
+本接口保证初始列表先于 Join 注册。原动态注册 C 接口保持原流程，运行期设备内存表刷新不在此次修复范围内。
+HCOMM 9.1 测试应先使用完整、固定的初始注册列表，不能据此认定 Join 后新增 MR 已被设备通道采用。
+
 #### smem_trans_destroy
 
 销毁TRANS实例。

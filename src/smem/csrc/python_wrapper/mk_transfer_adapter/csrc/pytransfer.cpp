@@ -450,45 +450,16 @@ int TransferAdapterPy::BatchTransferWriteWithQuant(const char *destUniqueId, std
 
 int TransferAdapterPy::RegisterMemory(uintptr_t buffer_addr, size_t capacity)
 {
-    if (handle_ == nullptr) {
-        {
-            std::lock_guard<std::mutex> regLock(regMemMutex_);
-            for (const auto &m : registeredMems_) {
-                if (m.addr == buffer_addr && m.capacity == capacity)
-                    return 0;
-            }
-            registeredMems_.push_back({buffer_addr, capacity});
-            ADAPTER_LOG_INFO("P registered memory addr=0x" << std::hex << buffer_addr << std::dec << " size="
-                                                           << capacity << " (total: " << registeredMems_.size() << ")");
-        }
-
-        std::lock_guard<std::mutex> lock(connMutex_);
-        for (auto &entry : connections_) {
-            if (!entry.second.active || entry.second.handle == nullptr)
-                continue;
-            char *buffer = reinterpret_cast<char *>(buffer_addr);
-            int ret = smem_trans_register_mem(entry.second.handle, buffer, capacity, 0);
-            if (ret != 0) {
-                ADAPTER_LOG_ERROR("broadcast register_mem to " << entry.first << " failed, ret=" << ret);
-            }
-        }
-        return 0;
-    }
-
-    ADAPTER_ASSERT_RETURN(handle_ != nullptr, "handle_ is null", -1);
-    char *buffer = reinterpret_cast<char *>(buffer_addr);
-    return smem_trans_register_mem(handle_, buffer, capacity, 0);
+    return BatchRegisterMemory({buffer_addr}, {capacity});
 }
 
 int TransferAdapterPy::UnregisterMemory(uintptr_t buffer_addr)
 {
+    std::lock_guard<std::mutex> regLock(regMemMutex_);
     if (handle_ == nullptr) {
-        {
-            std::lock_guard<std::mutex> regLock(regMemMutex_);
-            registeredMems_.erase(std::remove_if(registeredMems_.begin(), registeredMems_.end(),
-                                                 [buffer_addr](const RegMem &m) { return m.addr == buffer_addr; }),
-                                  registeredMems_.end());
-        }
+        registeredMems_.erase(std::remove_if(registeredMems_.begin(), registeredMems_.end(),
+                                             [buffer_addr](const RegMem &m) { return m.addr == buffer_addr; }),
+                              registeredMems_.end());
 
         std::lock_guard<std::mutex> lock(connMutex_);
         char *buffer = reinterpret_cast<char *>(buffer_addr);
@@ -513,55 +484,68 @@ int TransferAdapterPy::UnregisterMemory(uintptr_t buffer_addr)
 
 int TransferAdapterPy::BatchRegisterMemory(std::vector<uintptr_t> buffer_addrs, std::vector<size_t> capacities)
 {
-    if (buffer_addrs.size() != capacities.size()) {
-        ADAPTER_LOG_ERROR("Size of buffer_addrs and capacities is not equal.");
+    if (buffer_addrs.size() != capacities.size() || buffer_addrs.size() > MAX_BATCH_COUNT) {
+        ADAPTER_LOG_ERROR("invalid registration counts, addresses=" << buffer_addrs.size()
+                                                                  << " capacities=" << capacities.size());
         return -1;
     }
-
-    const size_t count = buffer_addrs.size();
-    if (count > MAX_BATCH_COUNT) {
-        ADAPTER_LOG_ERROR("array size (" << count << ") exceeds limit(" << MAX_BATCH_COUNT << ")");
-        return -1;
-    }
-
-    std::vector<void *> registerAddrs(count);
-    for (size_t i = 0; i < count; ++i) {
-        registerAddrs[i] = reinterpret_cast<void *>(buffer_addrs[i]);
-    }
-
-    if (handle_ == nullptr) {
-        {
-            std::lock_guard<std::mutex> regLock(regMemMutex_);
-            for (size_t i = 0; i < count; ++i) {
-                bool dup = false;
-                for (const auto &m : registeredMems_) {
-                    if (m.addr == buffer_addrs[i] && m.capacity == capacities[i]) {
-                        dup = true;
-                        break;
-                    }
-                }
-                if (!dup)
-                    registeredMems_.push_back({buffer_addrs[i], capacities[i]});
-            }
-            ADAPTER_LOG_INFO("P batch registered " << count << " memories (total: " << registeredMems_.size() << ")");
+    std::vector<void *> addresses;
+    for (size_t i = 0; i < buffer_addrs.size(); ++i) {
+        if (buffer_addrs[i] == 0U || capacities[i] == 0U) {
+            ADAPTER_LOG_ERROR("invalid registration region, index=" << i << " capacity=" << capacities[i]);
+            return -1;
         }
-
-        std::lock_guard<std::mutex> lock(connMutex_);
-        for (auto &entry : connections_) {
-            if (!entry.second.active || entry.second.handle == nullptr)
-                continue;
-            int ret = smem_trans_batch_register_mem(entry.second.handle, registerAddrs.data(), capacities.data(),
-                                                    static_cast<uint32_t>(count), 0);
-            if (ret != 0) {
-                ADAPTER_LOG_ERROR("batch broadcast register_mem to " << entry.first << " failed, ret=" << ret);
-            }
-        }
+        addresses.push_back(reinterpret_cast<void *>(buffer_addrs[i]));
+    }
+    if (addresses.empty()) {
         return 0;
     }
+    std::lock_guard<std::mutex> regLock(regMemMutex_);
+    if (handle_ != nullptr) {
+        return smem_trans_batch_register_mem(handle_, addresses.data(), capacities.data(),
+                                              static_cast<uint32_t>(addresses.size()), 0U);
+    }
+    auto next = registeredMems_;
+    for (size_t i = 0; i < buffer_addrs.size(); ++i) {
+        auto same = [&](const RegMem &m) { return m.addr == buffer_addrs[i] && m.capacity == capacities[i]; };
+        if (std::find_if(next.begin(), next.end(), same) == next.end()) {
+            next.push_back({buffer_addrs[i], capacities[i]});
+        }
+    }
+    if (next.size() > MAX_BATCH_COUNT) {
+        ADAPTER_LOG_ERROR("too many registered memories, count=" << next.size() << " limit=" << MAX_BATCH_COUNT);
+        return -1;
+    }
+    if (next.size() == registeredMems_.size()) {
+        return 0;
+    }
+    if (RegisterOnConnections(addresses, capacities) != 0) {
+        return -1;
+    }
+    registeredMems_ = std::move(next);
+    return 0;
+}
 
-    // legacy mode or receiver
-    ADAPTER_ASSERT_RETURN(handle_ != nullptr, "handle_ is null", -1);
-    return smem_trans_batch_register_mem(handle_, registerAddrs.data(), capacities.data(), count, 0);
+int TransferAdapterPy::RegisterOnConnections(std::vector<void *> &addresses, std::vector<size_t> &capacities)
+{
+    std::lock_guard<std::mutex> lock(connMutex_);
+    for (const auto &entry : connections_) {
+        if (!entry.second.active || entry.second.handle == nullptr) {
+            continue;
+        }
+        if ((config_.dataOpType & SMEMB_DATA_OP_DEVICE_URMA) != 0U) {
+            ADAPTER_LOG_ERROR("DEVICE_URMA requires registration before connecting, session="
+                              << entry.first << " count=" << addresses.size());
+            return -1;
+        }
+        auto ret = smem_trans_batch_register_mem(entry.second.handle, addresses.data(), capacities.data(),
+                                                   static_cast<uint32_t>(addresses.size()), 0U);
+        if (ret != 0) {
+            ADAPTER_LOG_ERROR("register memories failed, session=" << entry.first << " ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
 }
 
 void TransferAdapterPy::TransferDestroy()
@@ -628,28 +612,25 @@ std::string TransferAdapterPy::GetConfigStoreProtocol(const std::string &storeUr
     return storeUrl.substr(0, pos + protocolLen);
 }
 
-// Create the transfer connection to the peer and replay the registered memories; returns nullptr on failure
-// (on that path the connection has already been destroyed).
+// Create the transfer connection with its registered memories included in the initial Join.
 smem_trans_t TransferAdapterPy::CreateAndReplayConnection(const std::string &sessionId, const std::string &storeUrl)
 {
-    ADAPTER_LOG_INFO("lazy connecting to D: " << sessionId << " via store: " << storeUrl);
-    smem_trans_t handle = smem_trans_create(storeUrl.c_str(), sessionId_.c_str(), &config_);
+    // GetOrCreateConnection holds regMemMutex_ until the connection is published.
+    std::vector<void *> addresses;
+    std::vector<size_t> capacities;
+    for (const auto &memory : registeredMems_) {
+        addresses.push_back(reinterpret_cast<void *>(memory.addr));
+        capacities.push_back(memory.capacity);
+    }
+    ADAPTER_LOG_INFO("lazy connecting with initial memories, session=" << sessionId << " count=" << addresses.size());
+    auto handle = smem_trans_create_with_memories(storeUrl.c_str(), sessionId_.c_str(), &config_, addresses.data(),
+                                                  capacities.data(), static_cast<uint32_t>(addresses.size()));
     if (handle == nullptr) {
-        ADAPTER_LOG_ERROR("lazy smem_trans_create failed for session: " << sessionId);
+        ADAPTER_LOG_ERROR("lazy create with initial memories failed, session=" << sessionId);
         return nullptr;
     }
-
     smem_trans_set_peer_down_callback(handle, TransferAdapterPy::PeerDownCallback, this);
-    const int replayRet = ReplayRegisteredMemories(handle);
-    if (replayRet == 0) {
-        return handle;
-    }
-    // A connection whose replay failed carries incomplete registration info, so drop it and let the next
-    // transfer lazily reconnect.
-    ADAPTER_LOG_ERROR("replay registered memories failed, drop connection. session: " << sessionId
-                                                                                      << ", ret: " << replayRet);
-    smem_trans_destroy(handle, 0);
-    return nullptr;
+    return handle;
 }
 
 // Connection teardown: clear the pending flag and wake up the waiting threads; connMutex_ must be held.
@@ -677,6 +658,8 @@ smem_trans_t TransferAdapterPy::GetOrCreateConnection(const std::string &session
 
     pendingConnections_.insert(sessionId);
     lock.unlock();
+    // Lock order: registration, then connections. Registration cannot miss an unpublished connection.
+    std::unique_lock<std::mutex> regLock(regMemMutex_);
 
     // session_id format is now "IP:PORT" (no _pid suffix), the store URL prefix
     // is the session_id itself.
@@ -705,38 +688,6 @@ smem_trans_t TransferAdapterPy::GetOrCreateConnection(const std::string &session
     connections_[sessionId] = {handle, true};
     ADAPTER_LOG_INFO("lazy connected to D: " << sessionId << " (total connections: " << connections_.size() << ")");
     return handle;
-}
-
-int TransferAdapterPy::ReplayRegisteredMemories(smem_trans_t handle)
-{
-    if (handle == nullptr) {
-        return 0;
-    }
-    std::vector<RegMem> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(regMemMutex_);
-        if (registeredMems_.empty()) {
-            return 0;
-        }
-        snapshot = registeredMems_;
-    }
-
-    const size_t count = snapshot.size();
-    std::vector<void *> addrs(count);
-    std::vector<size_t> caps(count);
-    for (size_t i = 0; i < count; ++i) {
-        addrs[i] = reinterpret_cast<void *>(snapshot[i].addr);
-        caps[i] = snapshot[i].capacity;
-    }
-
-    ADAPTER_LOG_INFO("replaying " << count << " registered memories on new connection");
-
-    int ret = smem_trans_batch_register_mem(handle, addrs.data(), caps.data(), static_cast<uint32_t>(count), 0);
-    if (ret != 0) {
-        ADAPTER_LOG_ERROR("replay batch_register_mem failed, ret=" << ret);
-        return -1;
-    }
-    return 0;
 }
 
 void TransferAdapterPy::OnLinkDownByPeerAddr(const std::string &peerAddr)

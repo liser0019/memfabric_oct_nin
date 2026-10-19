@@ -60,6 +60,22 @@ void smem_trans_uninit(uint32_t flags);
 smem_trans_t smem_trans_create(const char *storeUrl, const char *uniqueId, const smem_trans_config_t *config);
 
 /**
+ * @brief Create a transfer with its initial memories registered and exported before joining the group.
+ *
+ * @param storeUrl         [in] configuration store URL, as for smem_trans_create
+ * @param uniqueId         [in] unique local transfer identifier
+ * @param config           [in] transfer configuration
+ * @param addresses        [in] initial memory addresses; may be null when count is zero
+ * @param capacities       [in] initial memory sizes in bytes; may be null when count is zero
+ * @param count            [in] number of initial regions
+ * @return transfer handle on success; null on failure, with the partial entry destroyed
+ * @note The caller retains ownership of the memory and must keep it alive until the transfer is destroyed.
+ */
+smem_trans_t smem_trans_create_with_memories(const char *storeUrl, const char *uniqueId,
+                                            const smem_trans_config_t *config, void *const addresses[],
+                                            const size_t capacities[], uint32_t count);
+
+/**
  * @brief Destroy the transfer created by <i>smem_trans_create</i>
  *
  * @param handle           [in] the transfer object created

@@ -115,12 +115,12 @@ private:
 
     // === connection management ===
     smem_trans_t GetOrCreateConnection(const std::string &sessionId);
-    // Connect and replay the registered memories; returns nullptr on failure (connection already destroyed)
+    // Register the initial snapshot before Join; caller holds regMemMutex_. Returns null on failure.
     smem_trans_t CreateAndReplayConnection(const std::string &sessionId, const std::string &storeUrl);
     // Clear the pending flag and wake up the waiting threads; connMutex_ must be held
     void FinishPendingConnection(const std::string &sessionId);
-    // Replay the registered memories; returns 0 on success / -1 on failure
-    int ReplayRegisteredMemories(smem_trans_t handle);
+    // Caller holds regMemMutex_; lock order is registration, then connections.
+    int RegisterOnConnections(std::vector<void *> &addresses, std::vector<size_t> &capacities);
 
     // === link down async cleanup ===
     static void PeerDownCallback(const char *peerAddr, void *userData);
