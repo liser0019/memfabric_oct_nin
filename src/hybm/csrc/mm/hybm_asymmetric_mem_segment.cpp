@@ -280,8 +280,11 @@ Result AsymmetricMemSegment::CheckHostRegisterAllowed() const noexcept
     if (options_.dataOpType == 0U) {
         return BM_OK;
     }
+    if (socType_ == AscendSocType::ASCEND_950 && options_.dataOpType == HYBM_DOP_TYPE_DEVICE_URMA) {
+        return BM_OK;
+    }
     // 含 host 类传输：数据面走 host 侧 transport，放行。
-    // 纯 SDMA/设备类 op 一律拒绝（评审结论）：SDMA 引擎不支持访问外部注册 DRAM，
+    // 其余纯 SDMA/设备类 op 拒绝：SDMA 引擎不支持访问外部注册 DRAM，
     // 放行会导致数据面在无映射 GVA 上失败，必须在注册入口显式报错
     if ((options_.dataOpType & hostTransOps) != 0U) {
         return BM_OK;
