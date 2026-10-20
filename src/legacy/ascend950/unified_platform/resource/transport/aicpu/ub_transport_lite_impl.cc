@@ -196,8 +196,15 @@ void UbTransportLiteImpl::ParseLocBufferMap(std::vector<char> &data)
         return;
     }
  
-    u32 rmtBufferSizePerDto = data.size() / num;
-    HCCL_INFO("ParseLocBufferMap num=%u, sizePerDto=%u", num, rmtBufferSizePerDto);
+    // GetSingleRmtBufferUniqueId also writes notifyId after the four local MR fields.
+    constexpr size_t baseDtoBytes = 2U * sizeof(u64) + 2U * sizeof(u32);
+    const size_t rmtBufferSizePerDto = data.size() / num;
+    if (data.size() % num != 0 ||
+        (rmtBufferSizePerDto != baseDtoBytes && rmtBufferSizePerDto != baseDtoBytes + sizeof(u32))) {
+        MACRO_THROW(InternalException,
+                    StringFormat("invalid local buffer DTO layout: num=%u bytes=%zu", num, data.size()));
+    }
+    HCCL_INFO("ParseLocBufferMap num=%u, sizePerDto=%zu", num, rmtBufferSizePerDto);
     BinaryStream binaryStream(data);
  
     for (u32 idx = 0; idx < num; idx++) {
@@ -206,6 +213,10 @@ void UbTransportLiteImpl::ParseLocBufferMap(std::vector<char> &data)
         binaryStream >> ubBufLite.size;
         binaryStream >> ubBufLite.tokenId;
         binaryStream >> ubBufLite.tokenValue;
+        if (rmtBufferSizePerDto == baseDtoBytes + sizeof(u32)) {
+            u32 ignoredNotifyId = 0;
+            binaryStream >> ignoredNotifyId;
+        }
         HCCL_INFO("idx=%u, LocBuffer %s", idx, ubBufLite.Describe().c_str());
         locBufferMap[static_cast<uintptr_t>(ubBufLite.addr)] = ubBufLite;
     }
